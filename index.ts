@@ -1,7 +1,7 @@
 import "@logseq/libs";
 import { BlockEntity, PageEntity, SettingSchemaDesc } from "@logseq/libs/dist/LSPlugin.user";
-import ical from "node-ical";
 import axios from "axios";
+import ical from "node-ical";
 import {
   getDateForPage,
   getDateForPageWithoutBrackets,
@@ -138,7 +138,7 @@ const settingsTemplate: SettingSchemaDesc[] = [
 logseq.useSettingsSchema(settingsTemplate);
 
 function sortDate(data) {
-  return data.sort(function (a, b) {
+  return data.sort(function(a, b) {
     return (
       Math.round(new Date(a.start).getTime() / 1000) -
       Math.round(new Date(b.start).getTime() / 1000)
@@ -166,22 +166,31 @@ async function findDate(preferredDateFormat) {
     return getDateForPageWithoutBrackets(new Date(), preferredDateFormat);
   }
 }
+
 function rawParser(rawData) {
   logseq.App.showMsg("Parsing Calendar Items");
   var eventsArray = [];
   var rawDataV2 = ical.parseICS(rawData);
+  let currentYear = new Date().getFullYear();
+  var recurringStartDate = new Date(currentYear, 0, 1);
+  var recurringEndDate = new Date(currentYear, 11, 31);
+
+
   for (const dataValue in rawDataV2) {
+    if (!Object.prototype.hasOwnProperty.call(rawDataV2, dataValue)) continue;
+
     const event = rawDataV2[dataValue];
-    if (typeof event.rrule == "undefined") {
+
+    if (event.type !== 'VEVENT' || !event.rrule) {
       //@ts-expect-error
-      eventsArray.push(rawDataV2[dataValue]); //simplifying results, credits to https://github.com/muness/obsidian-ics for this implementations
+      eventsArray.push(event); //simplifying results, credits to https://github.com/muness/obsidian-ics for this implementations
     } else {
       const dates = event.rrule.between(
-        new Date(2021, 0, 1, 0, 0, 0, 0),
-        new Date(2023, 11, 31, 0, 0, 0, 0)
+        recurringStartDate,
+        recurringEndDate
       );
-      console.log(dates);
       if (dates.length === 0) continue;
+      console.log(dates);
 
       console.log("Summary:", event.summary);
       console.log("Original start:", event.start);
@@ -191,56 +200,42 @@ function rawParser(rawData) {
       );
 
       dates.forEach((date) => {
-        let newDate;
+        let newDate
         if (event.rrule.origOptions.tzid) {
           // tzid present (calculate offset from recurrence start)
-          const dateTimezone = moment.tz.zone("UTC");
-          const localTimezone = moment.tz.guess();
-          
-          const tz =
-            event.rrule.origOptions.tzid === localTimezone
-              ? event.rrule.origOptions.tzid
-              : localTimezone;
-          const timezone = moment.tz.zone(tz);
-          const offset =
-            timezone.utcOffset(date) - dateTimezone.utcOffset(date);
-          // newDate = moment(date).add(offset, "minutes").toDate();
-          // console.log(offset)
-          newDate = date
-          //FIXME: this is a hack to get around the fact that the offset is not being calculated correctly
+          const dateTimezone = moment.tz.zone('UTC')
+          const localTimezone = moment.tz.guess()
+          const tz = event.rrule.origOptions.tzid === localTimezone ? event.rrule.origOptions.tzid : localTimezone
+          const timezone = moment.tz.zone(tz)
+          const offset = timezone.utcOffset(date) - dateTimezone.utcOffset(date)
+          newDate = moment(date).add(offset, 'minutes').toDate()
         } else {
           // tzid not present (calculate offset from original start)
-          newDate = new Date(
-            date.setHours(
-              date.getHours() -
-                (event.start.getTimezoneOffset() - date.getTimezoneOffset()) /
-                  60
-            )
-          );
+          newDate = new Date(date.setHours(date.getHours() - ((event.start.getTimezoneOffset() - date.getTimezoneOffset()) / 60)))
         }
-        const start = moment(newDate);
+        const start = moment(newDate)
         const secondaryEvent = { ...event, start: start["_d"] };
         eventsArray.push(secondaryEvent);
       });
 
-      console.log(
-        "-----------------------------------------------------------------------------------------"
-      );
     }
   }
   console.log(eventsArray);
   return sortDate(eventsArray);
 }
 
-function parseLocation(rawLocation){
+function parseLocation(rawLocation) {
   const matches = rawLocation.match(urlRegexSafe());
+  if (!matches) {
+    return "No Location";
+  }
   var parsed = rawLocation;
   var linkDesc;
   for (const match of matches) {
-    try{
+    try {
       var url = new URL(match);
       linkDesc = url.hostname + '/...';
-    } catch (e){
+    } catch (e) {
       //this really shouldn't happen
       //but if the regex returns a url that URL doesn't like, just use the whole link
       linkDesc = match;
@@ -354,11 +349,10 @@ async function insertJournalBlocks(
         formattedStart,
         preferredDateFormat
       );
-      let startTime = await formatTime(formattedStart) ;
+      let startTime = await formatTime(formattedStart);
       let endTime = await formatTime(data[dataKey]["end"]);
       let location = data[dataKey]["location"];
-      let summary;
-      summary = data[dataKey]["summary"];
+      let summary = data[dataKey]["summary"];
       // }
       // using user provided template
       let headerString = templateFormatter(
@@ -413,11 +407,11 @@ async function openCalendar2(calendarName, url) {
     const preferredDateFormat = userConfigs.preferredDateFormat;
     logseq.App.showMsg("Fetching Calendar Items");
     let response2 = await axios.get(url);
-    console.log(response2);
-    var hello = await rawParser(response2.data);
+    var payload = await rawParser(response2.data);
     const date = await findDate(preferredDateFormat);
+    console.log(date)
     insertJournalBlocks(
-      hello,
+      payload,
       preferredDateFormat,
       calendarName,
       date
@@ -477,7 +471,7 @@ async function main() {
   });
 
   for (const accountName in accounts2) {
-   
+
     let accountSetting = accounts2[accountName];
     logseq.App.registerCommandPalette(
       {
